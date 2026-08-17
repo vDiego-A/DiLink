@@ -11,6 +11,7 @@ En `Supabase Dashboard > SQL Editor`, ejecuta en este orden:
 7. `migrations/202608160001_pro_media_and_design.sql`
 8. `migrations/202608160002_analytics.sql`
 9. `migrations/202608160003_free_image_background.sql`
+10. `migrations/202608170001_resumable_profile_media.sql`
 
 Si una migración ya fue ejecutada correctamente, continúa con la siguiente.
 
@@ -38,11 +39,13 @@ Después ejecuta la migración `006`, inicia sesión con esa cuenta y abre el da
 
 Las cuentas registradas en `admin_users` reciben acceso Pro interno mientras mantengan ese rol. No necesitan crear una solicitud de pago.
 
-La migración `007` incorpora las nuevas fuentes y estilos de botón Pro. También permite fondos sólidos y gradientes en Free, y crea `background-assets` para que únicamente una cuenta con capacidades Pro pueda subir su imagen o video de fondo. Los videos se limitan a MP4/WebM, 25 MB y la interfaz valida una duración máxima de 10 segundos.
+La migración `007` incorpora las nuevas fuentes y estilos de botón Pro. También permite fondos sólidos y gradientes en Free, y crea inicialmente `background-assets`; las capacidades multimedia finales quedan actualizadas por las migraciones `009` y `010`.
 
 La migración `008` registra visitas y clics únicamente para perfiles publicados. Free recibe los totales básicos; las series diarias y el rendimiento por enlace se validan en PostgreSQL y requieren acceso Pro vigente.
 
 La migración `009` permite que Free suba y guarde una imagen de fondo propia. Las políticas de Storage y la función de guardado siguen exigiendo Pro para cualquier fondo de video.
+
+La migración `010` habilita imágenes y videos como avatar, elimina el límite específico del bucket de perfil y permite cargas reanudables. También amplía los videos de fondo a cualquier MIME `video/*`, mantiene Pro como requisito y aplica en Storage el máximo de 20 MB para imágenes de fondo. El límite global configurado en el proyecto Supabase continúa aplicándose a todos los archivos.
 
 Al aprobar una solicitud, se crea o renueva una suscripción Pro por 30 días. Si vence, el plan vuelve a Free, se restaura un diseño compatible y los enlaces posteriores al tercero se conservan pero quedan inactivos.
 

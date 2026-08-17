@@ -492,12 +492,16 @@ function PlanOption({
         checked={checked}
         onChange={() => onChange(id)}
       />
-      <span className="flex min-h-14 items-center justify-between rounded-xl border border-transparent px-3.5 text-sm transition-all peer-checked:border-violet-400/25 peer-checked:bg-[var(--surface)] peer-checked:shadow-[var(--card-shadow)]">
+      <span className={`flex min-h-14 items-center justify-between rounded-xl border px-3.5 text-sm transition-all ${checked ? "border-violet-500 bg-[linear-gradient(135deg,rgba(124,58,237,0.16),rgba(37,99,235,0.08),var(--surface))] shadow-[0_0_0_3px_rgba(124,58,237,0.15),0_12px_28px_rgba(76,29,149,0.14)]" : "border-transparent hover:border-violet-400/30 hover:bg-[var(--surface)]"}`}>
         <span>
           <strong className="block text-[var(--foreground)]">{label}</strong>
           <span className="text-[11px] text-[var(--muted)]">{detail}</span>
         </span>
-        {featured && (
+        {checked ? (
+          <span className="grid size-6 place-items-center rounded-full bg-violet-600 text-white shadow-md" aria-label={`${label} seleccionado`}>
+            <Check className="size-3.5" aria-hidden="true" />
+          </span>
+        ) : featured && (
           <span className="rounded-full bg-violet-500/10 px-2 py-1 text-[8px] font-bold uppercase tracking-wider text-[var(--accent-text)]">
             Completo
           </span>

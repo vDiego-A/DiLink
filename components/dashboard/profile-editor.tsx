@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
-import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -33,6 +32,7 @@ import {
   UserRound,
 } from "lucide-react";
 import { saveProfileChanges } from "@/app/dashboard/editor/actions";
+import { AvatarMedia } from "@/components/profile/avatar-media";
 import { PublicProfile } from "@/components/profile/public-profile";
 import { Logo } from "@/components/ui/logo";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
@@ -50,6 +50,7 @@ import {
 import { detectLinkIcon, normalizeUsername } from "@/lib/profile-editor";
 import { downloadProfileQr } from "@/lib/qr/download-profile-qr";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
+import { uploadMediaResumably } from "@/lib/supabase/resumable-upload";
 import type { ProfileLinkRow, ProfileRow } from "@/types/database";
 
 type ProfileEditorProps = {
@@ -122,6 +123,12 @@ export function ProfileEditor({ initialProfile, initialLinks, persistenceReady }
     };
   }, [backgroundPreview]);
 
+  useEffect(() => {
+    return () => {
+      if (avatarPreview.startsWith("blob:")) URL.revokeObjectURL(avatarPreview.split("#")[0]);
+    };
+  }, [avatarPreview]);
+
   const updateProfile = <Key extends keyof ProfileRow>(key: Key, value: ProfileRow[Key]) => {
     setProfile((current) => ({ ...current, [key]: value }));
     setSaveState("idle");
@@ -182,7 +189,7 @@ export function ProfileEditor({ initialProfile, initialLinks, persistenceReady }
         id: crypto.randomUUID(),
         profile_id: profile.id,
         title: `Nuevo enlace ${current.length + 1}`,
-        url: "https://",
+        url: "",
         icon: "link",
         position: current.length,
         is_active: true,
@@ -225,32 +232,19 @@ export function ProfileEditor({ initialProfile, initialLinks, persistenceReady }
   const chooseAvatar = (file: File | undefined) => {
     if (!file) return;
 
-    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+    const mediaKind = getAvatarMediaKind(file);
+    if (!mediaKind) {
       setSaveState("error");
-      setFeedback("Selecciona una imagen JPG, PNG o WebP.");
+      setFeedback("Selecciona una imagen, GIF animado o archivo de video válido.");
       return;
     }
 
-    if (file.size > 5 * 1024 * 1024) {
-      setSaveState("error");
-      setFeedback("La foto debe pesar menos de 5 MB.");
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result !== "string") return;
-      setAvatarPreview(reader.result);
-      setPendingAvatar(file);
-      setRemoveAvatar(false);
-      setSaveState("idle");
-      setFeedback("Foto lista. Guarda los cambios para publicarla.");
-    };
-    reader.onerror = () => {
-      setSaveState("error");
-      setFeedback("No pudimos leer esa imagen. Prueba con otra.");
-    };
-    reader.readAsDataURL(file);
+    const previewUrl = URL.createObjectURL(file);
+    setAvatarPreview(mediaKind === "video" ? `${previewUrl}#media=video` : previewUrl);
+    setPendingAvatar(file);
+    setRemoveAvatar(false);
+    setSaveState("idle");
+    setFeedback(mediaKind === "video" ? "Video de perfil listo. Guarda los cambios para publicarlo." : "Imagen de perfil lista. Guarda los cambios para publicarla.");
   };
 
   const clearAvatar = () => {
@@ -265,28 +259,26 @@ export function ProfileEditor({ initialProfile, initialLinks, persistenceReady }
     if (!file) return;
 
     const imageTypes = ["image/jpeg", "image/png", "image/webp"];
-    const videoTypes = ["video/mp4", "video/webm"];
-    const validType = type === "image" ? imageTypes.includes(file.type) : videoTypes.includes(file.type);
-    const maxSize = type === "image" ? 10 * 1024 * 1024 : 25 * 1024 * 1024;
+    const validType = type === "image" ? imageTypes.includes(file.type) : isVideoFile(file);
 
     if (!validType) {
       setSaveState("error");
-      setFeedback(type === "image" ? "Selecciona una imagen JPG, PNG o WebP." : "Selecciona un video MP4 o WebM.");
+      setFeedback(type === "image" ? "Selecciona una imagen JPG, PNG o WebP." : "Selecciona un archivo de video compatible con tu dispositivo.");
       return;
     }
 
-    if (file.size > maxSize) {
+    if (type === "image" && file.size > 20 * 1024 * 1024) {
       setSaveState("error");
-      setFeedback(type === "image" ? "La imagen de fondo debe pesar menos de 10 MB." : "El video debe pesar menos de 25 MB.");
+      setFeedback("La imagen de fondo debe pesar máximo 20 MB.");
       return;
     }
 
     if (type === "video") {
       try {
         const duration = await getVideoDuration(file);
-        if (!Number.isFinite(duration) || duration > 10.1) {
+        if (!Number.isFinite(duration) || duration > 30.1) {
           setSaveState("error");
-          setFeedback("El video de fondo debe durar máximo 10 segundos.");
+          setFeedback("El video de fondo debe durar máximo 30 segundos.");
           return;
         }
       } catch {
@@ -345,22 +337,23 @@ export function ProfileEditor({ initialProfile, initialLinks, persistenceReady }
         return;
       }
 
-      const { error: uploadError } = await supabase.storage
-        .from("avatars")
-        .upload(avatarPath, pendingAvatar, {
-          upsert: true,
-          contentType: pendingAvatar.type,
-          cacheControl: "3600",
+      const avatarKind = getAvatarMediaKind(pendingAvatar);
+      try {
+        await uploadMediaResumably({
+          bucket: "avatars",
+          objectPath: avatarPath,
+          file: pendingAvatar,
+          contentType: getUploadContentType(pendingAvatar, avatarKind || "image"),
+          onProgress: (percentage) => setFeedback(`Subiendo perfil… ${percentage}%`),
         });
-
-      if (uploadError) {
+      } catch {
         setSaveState("error");
-        setFeedback("No pudimos subir la foto. Comprueba que aplicaste la migración de Storage en Supabase.");
+        setFeedback("No pudimos subir el archivo de perfil. Comprueba la conexión y la migración más reciente de Storage.");
         return;
       }
 
       const { data } = supabase.storage.from("avatars").getPublicUrl(avatarPath);
-      avatarUrl = `${data.publicUrl}?v=${Date.now()}`;
+      avatarUrl = `${data.publicUrl}?v=${Date.now()}&media=${avatarKind || "image"}`;
     }
 
     if (pendingBackgroundFile && (profile.background_type === "image" || profile.background_type === "video")) {
@@ -372,15 +365,15 @@ export function ProfileEditor({ initialProfile, initialLinks, persistenceReady }
       }
 
       const backgroundPath = profile.background_type === "image" ? backgroundImagePath : backgroundVideoPath;
-      const { error: backgroundUploadError } = await supabase.storage
-        .from("background-assets")
-        .upload(backgroundPath, pendingBackgroundFile, {
-          upsert: true,
-          contentType: pendingBackgroundFile.type,
-          cacheControl: "3600",
+      try {
+        await uploadMediaResumably({
+          bucket: "background-assets",
+          objectPath: backgroundPath,
+          file: pendingBackgroundFile,
+          contentType: getUploadContentType(pendingBackgroundFile, profile.background_type),
+          onProgress: (percentage) => setFeedback(`Subiendo fondo… ${percentage}%`),
         });
-
-      if (backgroundUploadError) {
+      } catch {
         setSaveState("error");
         setFeedback("No pudimos subir el fondo. Comprueba que aplicaste la migración más reciente de Supabase.");
         return;
@@ -539,11 +532,12 @@ export function ProfileEditor({ initialProfile, initialLinks, persistenceReady }
               disabled={downloadingQr || !profile.is_published}
               aria-label={downloadingQr ? "Generando código QR" : "Descargar Código QR"}
               title={!profile.is_published ? "Guarda tu página para activar el código QR." : "Descargar código QR como imagen PNG"}
-              className="inline-flex h-9 items-center gap-2 rounded-full border border-violet-500/30 bg-violet-500/[0.08] px-3 text-xs font-semibold text-violet-600 hover:bg-violet-500/[0.14] disabled:cursor-not-allowed disabled:opacity-45 dark:text-violet-300"
+              className="inline-flex h-10 min-w-[132px] items-center justify-center gap-2 rounded-full border border-violet-400/40 bg-violet-600 px-3.5 text-xs font-semibold text-white shadow-lg shadow-violet-600/20 hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-45"
             >
-              {downloadingQr ? <LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" /> : <QrCode className="size-3.5" aria-hidden="true" />}
-              <span className="hidden sm:inline">{downloadingQr ? "Generando…" : "Descargar Código QR"}</span>
-              <Download className="size-3 sm:hidden" aria-hidden="true" />
+              {downloadingQr ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" /> : <Download className="size-4" aria-hidden="true" />}
+              <span className="sm:hidden">{downloadingQr ? "Generando QR…" : "Descargar QR"}</span>
+              <span className="hidden sm:inline">{downloadingQr ? "Generando código QR…" : "Descargar Código QR"}</span>
+              {!downloadingQr && <QrCode className="hidden size-4 sm:block" aria-hidden="true" />}
             </button>
             {profile.is_published && (
               <Link href={publicPath} target="_blank" className="inline-flex h-9 items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 text-xs font-semibold">
@@ -643,14 +637,13 @@ export function ProfileEditor({ initialProfile, initialLinks, persistenceReady }
               </div>
             ) : (
               <div className="space-y-5">
-                <EditorSection title="Foto de perfil" description="Elige la imagen que identificará tu página.">
+                <EditorSection title="Foto de perfil" description="Elige una imagen, logo animado o video que identificará tu página.">
                   <div className="flex flex-col gap-5 rounded-2xl border border-[var(--border)] bg-[var(--surface-soft)] p-4 sm:flex-row sm:items-center">
                     <div className="relative grid size-24 shrink-0 place-items-center overflow-hidden rounded-full border border-violet-400/25 bg-violet-500/10 text-violet-500">
                       {previewProfile.avatar_url ? (
-                        <Image
+                        <AvatarMedia
                           src={previewProfile.avatar_url}
                           alt="Vista previa de la foto de perfil"
-                          fill
                           sizes="96px"
                           className="object-cover"
                         />
@@ -659,23 +652,23 @@ export function ProfileEditor({ initialProfile, initialLinks, persistenceReady }
                       )}
                     </div>
                     <div className="flex-1">
-                      <p className="text-sm font-semibold">Tu foto aparecerá encima del nombre.</p>
-                      <p className="mt-1 text-xs leading-5 text-[var(--muted)]">Usa una imagen cuadrada JPG, PNG o WebP de hasta 5 MB.</p>
+                      <p className="text-sm font-semibold">Tu imagen o video aparecerá encima del nombre.</p>
+                      <p className="mt-1 text-xs leading-5 text-[var(--muted)]">Admite imágenes, GIF y videos. DiLink no impone un límite de peso; los archivos grandes se cargan por partes.</p>
                       <div className="mt-4 flex flex-wrap gap-2">
                         <label htmlFor="avatar-upload" className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-full bg-violet-600 px-4 text-xs font-semibold text-white focus-within:ring-2 focus-within:ring-violet-500">
                           <Upload className="size-3.5" aria-hidden="true" />
-                          Elegir foto
+                          Elegir archivo
                           <input
                             id="avatar-upload"
                             type="file"
-                            accept="image/jpeg,image/png,image/webp"
+                            accept="image/*,video/*"
                             className="sr-only"
                             onChange={(event) => chooseAvatar(event.target.files?.[0])}
                           />
                         </label>
                         {previewProfile.avatar_url && (
                           <button type="button" onClick={clearAvatar} className="inline-flex h-10 items-center justify-center rounded-full border border-[var(--border)] px-4 text-xs font-semibold text-[var(--muted)] hover:text-rose-500">
-                            Quitar foto
+                            Quitar archivo
                           </button>
                         )}
                       </div>
@@ -687,8 +680,10 @@ export function ProfileEditor({ initialProfile, initialLinks, persistenceReady }
                   <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                     {PROFILE_THEMES.map((theme) => {
                       const isPremium = theme.minimumPlan === "pro";
-                      return <button key={theme.id} type="button" onClick={() => updateProfile("theme", theme.id)} className={`relative rounded-2xl border p-3 text-left ${profile.theme === theme.id ? "border-violet-500 bg-violet-500/[0.07]" : "border-[var(--border)] bg-[var(--surface-soft)]"}`}>
+                      const selected = profile.theme === theme.id;
+                      return <button key={theme.id} type="button" aria-pressed={selected} onClick={() => updateProfile("theme", theme.id)} className={`relative rounded-2xl border p-3 text-left transition ${getSelectableOptionClasses(selected)}`}>
                         <span className="block aspect-[1.55] rounded-xl border border-white/10" style={{ background: theme.swatch }} />
+                        {selected && <span className="absolute left-5 top-5 grid size-6 place-items-center rounded-full bg-violet-600 text-white shadow-lg shadow-violet-950/30"><Check className="size-3.5" aria-hidden="true" /></span>}
                         {isPremium && <span className="absolute right-5 top-5 inline-flex items-center gap-1 rounded-full bg-black/65 px-2 py-1 text-[9px] font-bold text-white"><Crown className="size-3" aria-hidden="true" />PRO</span>}
                         <strong className="mt-3 block text-sm">{theme.name}</strong><span className="mt-1 block text-[10px] text-[var(--muted)]">{theme.description}</span>
                       </button>;
@@ -701,7 +696,7 @@ export function ProfileEditor({ initialProfile, initialLinks, persistenceReady }
                     {PROFILE_COLOR_PRESETS.map((preset) => {
                       const selected = profile.primary_color === preset.primary && profile.secondary_color === preset.secondary;
                       const isPremium = preset.minimumPlan === "pro";
-                      return <button key={preset.name} type="button" onClick={() => { setProfile((current) => ({ ...current, primary_color: preset.primary, secondary_color: preset.secondary })); setSaveState("idle"); }} className={`flex items-center gap-3 rounded-xl border p-3 text-left ${selected ? "border-violet-500 bg-violet-500/[0.07]" : "border-[var(--border)] bg-[var(--surface-soft)]"}`}><span className="flex -space-x-2"><span className="size-7 rounded-full border-2 border-[var(--surface)]" style={{ background: preset.primary }} /><span className="size-7 rounded-full border-2 border-[var(--surface)]" style={{ background: preset.secondary }} /></span><span className="text-xs font-semibold">{preset.name}</span>{isPremium ? <Crown className="ml-auto size-3.5 text-amber-500" aria-hidden="true" /> : selected && <Check className="ml-auto size-4 text-violet-500" aria-hidden="true" />}</button>;
+                      return <button key={preset.name} type="button" aria-pressed={selected} onClick={() => { setProfile((current) => ({ ...current, primary_color: preset.primary, secondary_color: preset.secondary })); setSaveState("idle"); }} className={`flex items-center gap-3 rounded-xl border p-3 text-left transition ${getSelectableOptionClasses(selected)}`}><span className="flex -space-x-2"><span className="size-7 rounded-full border-2 border-[var(--surface)]" style={{ background: preset.primary }} /><span className="size-7 rounded-full border-2 border-[var(--surface)]" style={{ background: preset.secondary }} /></span><span className="text-xs font-semibold">{preset.name}</span><span className="ml-auto flex items-center gap-2">{isPremium && <Crown className="size-3.5 text-amber-500" aria-hidden="true" />}{selected && <span className="grid size-5 place-items-center rounded-full bg-violet-600 text-white"><Check className="size-3" aria-hidden="true" /></span>}</span></button>;
                     })}
                   </div>
                   <div className="mt-4 grid gap-3 rounded-2xl border border-violet-400/20 bg-violet-500/[0.05] p-4 sm:grid-cols-2">
@@ -715,7 +710,8 @@ export function ProfileEditor({ initialProfile, initialLinks, persistenceReady }
                   <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                     {visibleFonts.map((font) => {
                       const isPremium = font.minimumPlan === "pro";
-                      return <button key={font.id} type="button" onClick={() => updateProfile("font", font.id)} className={`relative min-h-20 rounded-xl border p-3 text-left ${profile.font === font.id ? "border-violet-500 bg-violet-500/[0.07]" : "border-[var(--border)] bg-[var(--surface-soft)]"}`} style={{ fontFamily: `${font.id}, ui-sans-serif, system-ui` }}><span className="block text-lg font-semibold">Aa</span><span className="mt-1 block text-xs">{font.label}</span>{isPremium && <Crown className="absolute right-3 top-3 size-3.5 text-amber-500" aria-hidden="true" />}</button>;
+                      const selected = profile.font === font.id;
+                      return <button key={font.id} type="button" aria-pressed={selected} onClick={() => updateProfile("font", font.id)} className={`relative min-h-20 rounded-xl border p-3 text-left transition ${getSelectableOptionClasses(selected)}`} style={{ fontFamily: `${font.id}, ui-sans-serif, system-ui` }}><span className="block text-lg font-semibold">Aa</span><span className="mt-1 block text-xs">{font.label}</span><span className="absolute right-3 top-3 flex items-center gap-1.5">{isPremium && <Crown className="size-3.5 text-amber-500" aria-hidden="true" />}{selected && <span className="grid size-5 place-items-center rounded-full bg-violet-600 text-white"><Check className="size-3" aria-hidden="true" /></span>}</span></button>;
                     })}
                   </div>
                   <button type="button" onClick={() => setShowAllFonts((current) => !current)} className="mt-4 inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface-soft)] text-xs font-semibold text-[var(--muted)] hover:text-[var(--foreground)]">
@@ -728,7 +724,8 @@ export function ProfileEditor({ initialProfile, initialLinks, persistenceReady }
                   <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                     {PROFILE_BUTTON_STYLES.map((style) => {
                       const isPremium = style.minimumPlan === "pro";
-                      return <button key={style.id} type="button" onClick={() => updateProfile("button_style", style.id)} style={getEditorButtonPreviewStyle(style.id, profile.primary_color, profile.secondary_color)} className={`relative h-14 border text-xs font-semibold ${style.id === "pill" ? "rounded-full" : style.id === "square" ? "rounded-md" : "rounded-2xl"} ${profile.button_style === style.id ? "ring-2 ring-violet-500 ring-offset-2 ring-offset-[var(--surface)]" : ""}`}>{style.name}{isPremium && <Crown className="absolute right-2 top-2 size-3 text-amber-300" aria-hidden="true" />}</button>;
+                      const selected = profile.button_style === style.id;
+                      return <button key={style.id} type="button" aria-pressed={selected} onClick={() => updateProfile("button_style", style.id)} style={getEditorButtonPreviewStyle(style.id, profile.primary_color, profile.secondary_color)} className={`relative h-14 border text-xs font-semibold transition ${style.id === "pill" ? "rounded-full" : style.id === "square" ? "rounded-md" : "rounded-2xl"} ${selected ? "outline-2 outline-offset-2 outline-violet-500" : "outline-none"}`}><span className={selected ? "drop-shadow-[0_1px_2px_rgba(0,0,0,0.65)]" : ""}>{style.name}</span>{selected && <span className="absolute left-2 top-2 grid size-5 place-items-center rounded-full bg-violet-600 text-white shadow-md"><Check className="size-3" aria-hidden="true" /></span>}{isPremium && <Crown className="absolute right-2 top-2 size-3 text-amber-300 drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]" aria-hidden="true" />}</button>;
                     })}
                   </div>
                 </EditorSection>
@@ -741,7 +738,7 @@ export function ProfileEditor({ initialProfile, initialLinks, persistenceReady }
                   </div>
                   <div className="mt-3 grid grid-cols-2 gap-3">
                     <BackgroundTypeButton label="Imagen · Free" selected={profile.background_type === "image"} icon={ImagePlus} onClick={() => selectBackgroundType("image")} />
-                    <BackgroundTypeButton label="Video · 10 s" selected={profile.background_type === "video"} locked={!isPro} icon={Film} onClick={() => selectBackgroundType("video")} />
+                    <BackgroundTypeButton label="Video · 30 s" selected={profile.background_type === "video"} locked={!isPro} icon={Film} onClick={() => selectBackgroundType("video")} />
                   </div>
                   {profile.background_type === "gradient" && (
                     <div className="mt-4 grid gap-3 rounded-2xl border border-violet-400/20 bg-violet-500/[0.05] p-4 sm:grid-cols-2">
@@ -761,8 +758,8 @@ export function ProfileEditor({ initialProfile, initialLinks, persistenceReady }
                           <strong className="text-sm">{profile.background_type === "image" ? "Imagen de fondo" : "Video de fondo"}</strong>
                           <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
                             {profile.background_type === "image"
-                              ? "JPG, PNG o WebP de hasta 10 MB. Aplicaremos una sombra para conservar la lectura."
-                              : "MP4 o WebM de hasta 25 MB y máximo 10 segundos. Se reproducirá sin sonido y en bucle."}
+                              ? "JPG, PNG o WebP de máximo 20 MB. Aplicaremos una sombra para conservar la lectura."
+                              : "Máximo 30 segundos. Para la mayor compatibilidad entre iPhone y Android usa MP4 con video H.264; WebM, MOV y otros formatos se aceptan si el navegador puede reproducirlos."}
                           </p>
                         </div>
                         <label htmlFor="background-media-upload" className="inline-flex h-10 shrink-0 cursor-pointer items-center justify-center gap-2 rounded-full bg-violet-600 px-4 text-xs font-semibold text-white focus-within:ring-2 focus-within:ring-violet-500">
@@ -771,7 +768,7 @@ export function ProfileEditor({ initialProfile, initialLinks, persistenceReady }
                           <input
                             id="background-media-upload"
                             type="file"
-                            accept={profile.background_type === "image" ? "image/jpeg,image/png,image/webp" : "video/mp4,video/webm"}
+                            accept={profile.background_type === "image" ? "image/jpeg,image/png,image/webp" : "video/*"}
                             className="sr-only"
                             onChange={(event) => chooseBackgroundMedia(event.target.files?.[0], profile.background_type as "image" | "video")}
                           />
@@ -828,9 +825,10 @@ function ColorInput({ label, value, onChange }: { label: string; value: string; 
 
 function BackgroundTypeButton({ label, selected, locked = false, icon: Icon, onClick }: { label: string; selected: boolean; locked?: boolean; icon?: typeof ImagePlus; onClick: () => void }) {
   return (
-    <button type="button" onClick={onClick} className={`relative inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border px-2 text-xs font-semibold ${selected ? "border-violet-500 bg-violet-500/[0.08] text-violet-500" : "border-[var(--border)] bg-[var(--surface-soft)]"}`}>
+    <button type="button" aria-pressed={selected} onClick={onClick} className={`relative inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border px-2 text-xs font-semibold transition ${selected ? "border-violet-500 bg-violet-500/[0.14] text-violet-500 shadow-[0_0_0_3px_rgba(124,58,237,0.14)]" : "border-[var(--border)] bg-[var(--surface-soft)]"}`}>
       {Icon && <Icon className="size-4" aria-hidden="true" />}
       {label}
+      {selected && <Check className="size-3.5" aria-hidden="true" />}
       {locked && <Crown className="absolute right-2 top-2 size-3 text-amber-500" aria-hidden="true" />}
     </button>
   );
@@ -854,6 +852,12 @@ function getEditorButtonPreviewStyle(style: string, primary: string, secondary: 
   if (style === "soft-3d") return { background: "var(--surface-soft)", borderColor: "var(--border)", color: "var(--foreground)", boxShadow: `0 7px 0 ${secondary}66,0 12px 22px rgba(15,23,42,0.16)` };
   if (style === "gradient") return { background: `linear-gradient(135deg,${primary},${secondary})`, borderColor: "rgba(255,255,255,0.2)", color: "#ffffff", boxShadow: `0 12px 30px ${primary}44` };
   return { background: "var(--surface-soft)", borderColor: "var(--border)", color: "var(--foreground)" };
+}
+
+function getSelectableOptionClasses(selected: boolean) {
+  return selected
+    ? "border-violet-500 bg-violet-500/[0.13] shadow-[0_0_0_3px_rgba(124,58,237,0.14),0_14px_30px_rgba(76,29,149,0.12)]"
+    : "border-[var(--border)] bg-[var(--surface-soft)] hover:border-violet-400/45";
 }
 
 function LinkEditorCard({ link, index, total, onChange, onMove, onRemove }: { link: ProfileLinkRow; index: number; total: number; onChange: <Key extends keyof ProfileLinkRow>(id: string, key: Key, value: ProfileLinkRow[Key]) => void; onMove: (index: number, direction: -1 | 1) => void; onRemove: (id: string) => void }) {
@@ -948,6 +952,58 @@ function getVideoDuration(file: File) {
     video.src = objectUrl;
   });
 }
+
+function getAvatarMediaKind(file: File): "image" | "video" | null {
+  if (file.type.startsWith("image/") || hasExtension(file, IMAGE_EXTENSIONS)) return "image";
+  if (isVideoFile(file)) return "video";
+  return null;
+}
+
+function isVideoFile(file: File) {
+  return file.type.startsWith("video/") || hasExtension(file, VIDEO_EXTENSIONS);
+}
+
+function hasExtension(file: File, extensions: ReadonlySet<string>) {
+  const extension = file.name.toLowerCase().split(".").pop();
+  return Boolean(extension && extensions.has(extension));
+}
+
+function getUploadContentType(file: File, kind: string) {
+  if (file.type.startsWith(`${kind}/`)) return file.type;
+
+  const extension = file.name.toLowerCase().split(".").pop() || "";
+  if (kind === "video") return VIDEO_CONTENT_TYPES[extension] || "video/mp4";
+  return IMAGE_CONTENT_TYPES[extension] || "image/jpeg";
+}
+
+const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "webp", "gif", "avif", "heic", "heif"]);
+const VIDEO_EXTENSIONS = new Set(["mp4", "m4v", "webm", "mov", "qt", "ogv", "ogg", "avi", "mkv", "3gp", "3g2", "mpeg", "mpg", "ts"]);
+const IMAGE_CONTENT_TYPES: Record<string, string> = {
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  png: "image/png",
+  webp: "image/webp",
+  gif: "image/gif",
+  avif: "image/avif",
+  heic: "image/heic",
+  heif: "image/heif",
+};
+const VIDEO_CONTENT_TYPES: Record<string, string> = {
+  mp4: "video/mp4",
+  m4v: "video/mp4",
+  webm: "video/webm",
+  mov: "video/quicktime",
+  qt: "video/quicktime",
+  ogv: "video/ogg",
+  ogg: "video/ogg",
+  avi: "video/x-msvideo",
+  mkv: "video/x-matroska",
+  "3gp": "video/3gpp",
+  "3g2": "video/3gpp2",
+  mpeg: "video/mpeg",
+  mpg: "video/mpeg",
+  ts: "video/mp2t",
+};
 
 function subscribeToOrigin() {
   return () => undefined;
