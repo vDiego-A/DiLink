@@ -11,6 +11,16 @@ npm run dev
 
 La aplicación estará disponible en `http://localhost:3000`.
 
+## Variables de entorno
+
+Crea `.env.local` a partir de `.env.example` y completa:
+
+- `NEXT_PUBLIC_SUPABASE_URL`: URL del proyecto Supabase.
+- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`: clave pública del proyecto Supabase.
+- `NEXT_PUBLIC_APP_URL`: URL pública absoluta de la aplicación. En local puede ser `http://localhost:3000`; en Vercel debe ser la URL definitiva del despliegue, por ejemplo `https://dilink.vercel.app`.
+
+Si `NEXT_PUBLIC_APP_URL` no está configurada durante el desarrollo, la aplicación utilizará `http://localhost:3000` como respaldo. No guardes credenciales reales en `.env.example`.
+
 ## Supabase y acceso con Google
 
 1. Completa `.env.local` con la URL y la Publishable Key del proyecto.
