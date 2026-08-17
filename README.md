@@ -1,36 +1,74 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Plataforma link-in-bio
 
-## Getting Started
+SaaS de páginas personales construido con Next.js, React, TypeScript, Tailwind CSS y Supabase. Incluye landing, autenticación, onboarding, editor y páginas públicas.
 
-First, run the development server:
+## Desarrollo local
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+La aplicación estará disponible en `http://localhost:3000`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Supabase y acceso con Google
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. Completa `.env.local` con la URL y la Publishable Key del proyecto.
+2. En `Authentication > URL Configuration`, utiliza `http://localhost:3000` como Site URL.
+3. Agrega `http://localhost:3000/**` a Redirect URLs para desarrollo local.
+4. En `Authentication > Sign In / Providers`, confirma que Email está habilitado.
+5. En `Authentication > Email Templates > Confirm signup`, usa este enlace dentro de la plantilla:
+   `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email&next=/dashboard`.
+6. En la plantilla `Reset password`, usa:
+   `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=recovery&next=/reset-password`.
+7. Para Google, habilita el proveedor y utiliza en Google Auth Platform el callback que muestra Supabase.
 
-## Learn More
+Las claves privadas de Google se configuran únicamente en Supabase; nunca deben agregarse al frontend.
 
-To learn more about Next.js, take a look at the following resources:
+## Perfiles y enlaces en Supabase
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Antes de utilizar el editor con guardado real:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+1. Abre `SQL Editor` en el Dashboard de Supabase.
+2. Crea una consulta nueva.
+3. Ejecuta en orden las nueve migraciones incluidas en `supabase/migrations/`.
+4. Si ya ejecutaste las anteriores, aplica solamente las migraciones pendientes. La `004` incorpora pagos y suscripciones Pro; la `005` habilita sus capacidades en el editor; la `006` concede acceso Pro a las cuentas administradoras; la `007` añade tipografías, botones premium y fondos multimedia; la `008` activa Analytics; y la `009` habilita imágenes de fondo en Free manteniendo el video en Pro.
+5. Comprueba en `Table Editor` que existen `profiles`, `links`, `payment_requests`, `subscriptions`, `admin_users` y `analytics_events`, todas con RLS habilitado, y en `Storage` que existen los buckets públicos `avatars` y `background-assets`.
 
-## Deploy on Vercel
+Las migraciones crean relaciones, restricciones de username, políticas por propietario, el límite Free de tres enlaces, almacenamiento seguro para fotos y fondos, verificación manual de Pago Móvil y funciones de guardado protegidas por el plan vigente.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Para habilitar la revisión administrativa, registra tu usuario en `admin_users` siguiendo las instrucciones de `supabase/README.md`. El panel privado estará disponible en `/admin/payments`.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Validación
+
+```bash
+npm run lint
+npm run build
+```
+
+## Organización
+
+- `app/`: layout global, metadata y composición de rutas.
+- `components/ui/`: piezas base reutilizables.
+- `components/marketing/`: secciones de la landing.
+- `components/auth/`: formularios y presentación del acceso.
+- `lib/config.ts`: configuración central del producto.
+- `lib/supabase/`: clientes seguros para navegador y servidor.
+- `proxy.ts`: actualización de cookies y persistencia de sesión SSR.
+- `lib/plans.ts`: límites y contenido centralizado de Free y Pro.
+- `lib/themes.ts`: catálogo compartido de temas.
+
+## Rutas de autenticación
+
+- `/signup`: registro por email y contraseña.
+- `/login`: acceso por email, contraseña o Google.
+- `/forgot-password`: solicitud segura de recuperación.
+- `/reset-password`: establecimiento de una nueva contraseña.
+- `/auth/callback`: intercambio PKCE para confirmaciones, recuperación y OAuth.
+- `/auth/confirm`: verificación SSR de enlaces de correo mediante `token_hash`.
+- `/dashboard`: resumen privado de la página del usuario.
+- `/dashboard/editor`: edición privada de perfil, enlaces y diseño.
+- `/dashboard/analytics`: resumen de visitas y clics, con detalle avanzado para Pro.
+- `/checkout`: reporte y seguimiento del Pago Móvil para Pro.
+- `/admin/payments`: revisión privada de pagos para administradores autorizados.
+- `/[username]`: página pública cuando el usuario activa su publicación.
