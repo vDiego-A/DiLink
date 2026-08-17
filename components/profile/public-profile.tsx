@@ -15,6 +15,8 @@ import {
   Video,
 } from "lucide-react";
 import { AnalyticsPageView, TrackedPublicLink } from "@/components/analytics/public-analytics";
+import { AvatarMedia } from "@/components/profile/avatar-media";
+import { BackgroundVideo } from "@/components/profile/background-video";
 import { APP_NAME } from "@/lib/config";
 import type { ProfileLinkRow, ProfileRow } from "@/types/database";
 
@@ -55,10 +57,9 @@ export function PublicProfile({ profile, links, preview = false }: PublicProfile
           aria-label={`Avatar de ${profile.display_name || profile.username}`}
         >
           {profile.avatar_url ? (
-            <Image
+            <AvatarMedia
               src={profile.avatar_url}
               alt={`Foto de perfil de ${profile.display_name || profile.username}`}
-              fill
               sizes="96px"
               className="object-cover"
             />
@@ -137,13 +138,8 @@ function BackgroundMedia({ type, value, preview }: { type: string; value: string
           className="object-cover opacity-65"
         />
       ) : (
-        <video
+        <BackgroundVideo
           src={value}
-          autoPlay
-          muted
-          loop
-          playsInline
-          preload="metadata"
           className="size-full object-cover opacity-60"
         />
       )}

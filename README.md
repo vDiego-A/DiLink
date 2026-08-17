@@ -41,8 +41,8 @@ Antes de utilizar el editor con guardado real:
 
 1. Abre `SQL Editor` en el Dashboard de Supabase.
 2. Crea una consulta nueva.
-3. Ejecuta en orden las nueve migraciones incluidas en `supabase/migrations/`.
-4. Si ya ejecutaste las anteriores, aplica solamente las migraciones pendientes. La `004` incorpora pagos y suscripciones Pro; la `005` habilita sus capacidades en el editor; la `006` concede acceso Pro a las cuentas administradoras; la `007` añade tipografías, botones premium y fondos multimedia; la `008` activa Analytics; y la `009` habilita imágenes de fondo en Free manteniendo el video en Pro.
+3. Ejecuta en orden las diez migraciones incluidas en `supabase/migrations/`.
+4. Si ya ejecutaste las anteriores, aplica solamente las migraciones pendientes. La `004` incorpora pagos y suscripciones Pro; la `005` habilita sus capacidades en el editor; la `006` concede acceso Pro a las cuentas administradoras; la `007` añade tipografías, botones premium y fondos multimedia; la `008` activa Analytics; la `009` habilita imágenes de fondo en Free manteniendo el video en Pro; y la `010` incorpora cargas multimedia reanudables, avatares animados y los límites actualizados.
 5. Comprueba en `Table Editor` que existen `profiles`, `links`, `payment_requests`, `subscriptions`, `admin_users` y `analytics_events`, todas con RLS habilitado, y en `Storage` que existen los buckets públicos `avatars` y `background-assets`.
 
 Las migraciones crean relaciones, restricciones de username, políticas por propietario, el límite Free de tres enlaces, almacenamiento seguro para fotos y fondos, verificación manual de Pago Móvil y funciones de guardado protegidas por el plan vigente.
